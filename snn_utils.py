@@ -4,6 +4,8 @@ from torchvision import datasets, models, transforms, utils
 import torch
 from torch.utils.data.dataloader import _DataLoaderIter, DataLoader
 import tqdm
+import copy
+from collections import namedtuple
 
 def __gen_ST(N, T, rate, mode = 'regular'):    
     if mode == 'regular':
@@ -95,7 +97,7 @@ def plotLIF(U, S, Vplot = 'all', staggering= 1, ax1=None, ax2=None, **kwargs):
     return ax1,ax2
 
 
-import numpy as np
+
 
 input_shape = [28,28,1]
 
@@ -104,118 +106,7 @@ def to_one_hot(t, width):
     t_onehot = torch.zeros(*t.shape+(width,))
     return t_onehot.scatter_(1, t.unsqueeze(-1), 1)
 
-class DataLoaderIterPreProcessed(_DataLoaderIter):
-    def __next__(self):
-       indices = next(self.sample_iter)  # may raise StopIteration
-       batch = self.collate_fn([self.dataset.preprocessed_get(i) for i in indices])
-       if self.pin_memory:
-           batch = pin_memory_batch(batch)
-       return batch
 
-class DataLoaderPreProcessed(DataLoader):
-    def __iter__(self):
-        return DataLoaderIterPreProcessed(self)
-
-def preprocess_dataset(dataset):
-    iterit = iter(dataset)
-    x, y = dataset[0]
-    td = torch.empty(torch.Size([len(dataset)])+x.shape, dtype = x.dtype)
-    tl = torch.empty(torch.Size([len(dataset)])+y.shape, dtype = y.dtype)
-    for idx in tqdm.tqdm(range(len(dataset)), desc = "Pre-processing dataset"):
-        td[idx], tl[idx] = dataset[idx]
-        
-    if dataset.train:
-        dataset.train_data, dataset.train_labels = td, tl
-    else:
-        dataset.test_data, dataset.test_labels = td, tl
-
-    def get(idx):
-        if dataset.train:
-            return dataset.train_data[idx], dataset.train_labels[idx] 
-        else:
-            return dataset.test_data[idx], dataset.test_labels[idx] 
-        
-    dataset.preprocessed_get = get
-    dataset.transform = None
-    return dataset
-
-def pixel_permutation(d_size, r_pix=1.0, seed=0):
-   import copy
-   n_pix = int(r_pix * d_size)
-   np.random.seed(seed*131313)
-   pix_sel = np.random.choice(d_size, n_pix, replace=False).astype(np.int32)
-   pix_prm = np.copy(pix_sel)
-   np.random.shuffle(pix_prm)
-   perm_inds = np.arange(d_size)
-   perm_inds[pix_sel] = perm_inds[pix_prm]
-   return perm_inds
-
-def permute_dataset(dataset, r_pix, seed):
-    if hasattr(dataset, 'train_data'):
-        datap = dataset.train_data
-    elif hasattr(dataset, 'test_data'):
-        datap = dataset.test_data
-    else:
-        raise Exception('no data found')
-    perm = pixel_permutation(np.prod(datap.shape[1:]), r_pix, seed=seed)
-    orig_shape = datap.shape[1:]
-    datap = datap.view(-1, np.prod(datap.shape[1:]))[:,perm].view(-1,*orig_shape)
-    if hasattr(dataset, 'train_data'):
-        dataset.train_data = datap
-    elif hasattr(dataset, 'test_data'):
-        dataset.test_data = datap
-
-def partition_dataset(dataset, Nparts=600, part=0):
-    if hasattr(dataset, 'train_data'):
-        datap = dataset.train_data
-        labelsp = dataset.train_labels
-    elif hasattr(dataset, 'test_data'):
-        datap = dataset.test_data
-        labelsp = dataset.test_labels
-    else:
-        raise Exception('no data found')
-
-    N = len(datap)
-    step = (N//Nparts)
-    datap = datap[step*part:step*(part+1)]
-    labelsp = labelsp[step*part:step*(part+1)]
-
-    if hasattr(dataset, 'train_data'):
-        dataset.train_data = datap
-        dataset.train_labels = labelsp
-    elif hasattr(dataset, 'test_data'):
-        dataset.test_data = datap
-        dataset.test_labels = labelsp
-
-def get_mnist_loader(batch_size, train, perm=0., Nparts=10, part=0, seed=0, taskid=0, pre_processed=True, **loader_kwargs):
-    """Builds and returns Dataloader for MNIST dataset."""
-    
-    transform = transforms.Compose([
-                    transforms.Grayscale(),
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.0,), (1.0,)),
-                    transforms.Lambda(lambda x: x.view([28,28]))])
-
-    dataset = datasets.MNIST(root='./data', download=True, transform=transform, train = train)
-    if perm>0:
-        permute_dataset(dataset, perm, seed=seed)
-    if Nparts>1:
-        partition_dataset(dataset, Nparts,part)
-
-    if pre_processed:
-        dataset = preprocess_dataset(dataset)
-        DL = DataLoaderPreProcessed
-    else:
-        DL = DataLoader
-    
-    loader = DL(dataset=dataset,
-                batch_size=batch_size,
-                shuffle=train,
-                **loader_kwargs)
-    loader.taskid = taskid
-    loader.name = 'MNIST_{}'.format(taskid,part)
-    loader.short_name = 'MNIST'
-    return loader
 
 def image2spiketrain(x,y,gain=50,min_duration=None, max_duration=500):
     y = to_one_hot(y, 10)
@@ -249,3 +140,251 @@ def target_convolve(tgt,alpha=8,alphas=5):
             tmp=np.convolve(np.convolve(tgt[:,i,j],kernel_alpha),kernel_alphas)[:max_duration]
             tgt[:,i,j] = tmp
     return tgt/tgt.max()
+
+
+datasetConfig = namedtuple('config',['image_size','batch_size','data_path'])
+
+class DataLoaderIterPreProcessed(_DataLoaderIter):
+    def __next__(self):
+           indices = next(self.sample_iter)  # may raise StopIteration
+           td, tl = self.dataset.data, self.dataset.targets
+           batch = self.collate_fn([(td[i], tl[i]) for i in indices])
+           return batch
+
+class DataLoaderPreProcessed(DataLoader):
+    def __iter__(self):
+        return DataLoaderIterPreProcessed(self)
+
+def sequester(tensor):
+    dtype = tensor.dtype
+    return torch.tensor(tensor.detach().cpu().numpy(), dtype=dtype)
+
+
+def preprocess_dataset(dataset):
+    x, y = dataset.data[0], dataset.targets[0]
+    td = torch.empty(torch.Size([len(dataset)])+x.shape, dtype = torch.float32)
+    if not hasattr(y, 'shape'):
+        tl = torch.empty(torch.Size([len(dataset)]), dtype = torch.int)
+    else:
+        tl = torch.empty(torch.Size([len(dataset)])+y.shape, dtype = y.dtype)
+    for idx in tqdm.tqdm(range(len(dataset)), desc = "Pre-processing dataset"):
+        td[idx], tl[idx] = dataset[idx]
+        
+    dataset.data, dataset.targets = td, tl
+
+
+    dataset.transform = None
+    return dataset
+
+
+def pixel_permutation(d_size, r_pix=1.0, seed=0):
+   import copy
+   n_pix = int(r_pix * d_size)
+   np.random.seed(seed*1313)
+   pix_sel = np.random.choice(d_size, n_pix, replace=False).astype(np.int32)
+   pix_prm = np.copy(pix_sel)
+   np.random.shuffle(pix_prm)
+   perm_inds = np.arange(d_size)
+   perm_inds[pix_sel] = perm_inds[pix_prm]
+   return perm_inds
+
+def permute_dataset(dataset, r_pix, seed):
+    shape = dataset.data.shape[1:]
+    datap = dataset.data.view(-1, np.prod(shape)).detach().numpy()
+    perm = pixel_permutation(np.prod(shape), r_pix, seed=seed)
+    return torch.FloatTensor(datap[:,perm].reshape(-1,*shape))
+
+def partition_dataset(dataset, Nparts=60, part=0):
+    N = len(dataset.data)
+
+    idx = np.arange(N, dtype='int')
+
+    step = (N//Nparts)
+    idx = idx[step*part:step*(part+1)]
+
+    td = dataset.data[idx]
+    tl = dataset.targets[idx]
+    return td, tl
+
+def dynaload(dataset,
+          batch_size,
+          name,
+          DL,
+          perm=0.,
+          Nparts=1,
+          part=0,
+          seed=0,
+          taskid=0,
+          base_perm=.0,
+          base_seed=0,
+          train = True,
+          **loader_kwargs):
+        if base_perm>0:
+            data = permute_dataset(dataset, base_perm, seed=base_seed)
+            dataset.data = data
+        if perm>0:
+            data = permute_dataset(dataset, perm, seed=seed)
+            dataset.data = data
+
+        loader = DL(dataset=dataset,
+                    batch_size=batch_size,
+                    shuffle=dataset.train,
+                    **loader_kwargs)
+
+        loader.taskid = taskid
+        loader.name = name +'_{}'.format(part)
+        loader.short_name = name
+        return loader
+
+
+def mnist_loader_dynamic(
+        config,
+        train,
+        pre_processed = True,
+        Nparts=1,
+        part=1):
+    """Builds and returns Dataloader for MNIST and SVHN dataset."""
+    
+    transform = transforms.Compose([
+                    transforms.Resize(config.image_size),
+                    transforms.Grayscale(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.0,), (1.0,))])
+
+
+    dataset = datasets.MNIST(root=config.data_path, download=True, transform=transform, train = train)
+    if Nparts>1:
+        data, targets = partition_dataset(dataset, Nparts, part)
+        dataset.data = data
+        dataset.targets = targets
+
+    if pre_processed:
+        dataset_ = preprocess_dataset(dataset)
+        DL = DataLoaderPreProcessed
+    else:
+        dataset_ = dataset
+        DL = DataLoader
+    batch_size = config.batch_size
+    name = 'MNIST'
+
+    return dataset_, name, DL
+
+def get_mnist_loader(
+        batch_size,
+        train, 
+        perm=0.,
+        Nparts=1,
+        part=0,
+        seed=0,
+        taskid=0,
+        pre_processed=True,
+        base_perm=.0,
+        base_seed=0,
+        **loader_kwargs):
+    
+    config = datasetConfig(image_size = [28,28], batch_size = batch_size, data_path = './data/mnist')
+    
+    d,name,dl = mnist_loader_dynamic(config, train, pre_processed, Nparts, part)
+    
+    return dynaload(
+          d,
+          config.batch_size,
+          name,
+          dl,
+          perm=perm,
+          Nparts=Nparts,
+          part=part,
+          seed=seed,
+          taskid=taskid,
+          base_perm=base_perm,
+          base_seed=base_seed,
+          train = train,
+          **loader_kwargs)
+
+def usps_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
+    """Builds and returns Dataloader for MNIST and SVHN dataset."""
+    from usps_loader import USPS
+    
+    transform = transforms.Compose([
+#                    transforms.ToPILImage(),
+                    transforms.Resize(config.image_size),
+                    transforms.Grayscale(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.0,), (1.0,))])
+    
+    dataset = USPS(root=config.data_path, download=True, transform=transform, train = train)
+    name = 'USPS'
+
+    if Nparts>1:
+        partition_dataset(dataset, Nparts, part)
+
+    if pre_processed:
+        dataset = preprocess_dataset(dataset)
+        DL = DataLoaderPreProcessed
+    else:
+        DL = DataLoader
+
+    return dataset,name, DL
+
+
+def get_usps_loader(config, train, perm=0., Nparts=1, part=0, seed=0, taskid=0, pre_processed=True, **loader_kwargs):
+    """Builds and returns Dataloader for MNIST and SVHN dataset."""
+    dataset,name,DL = usps_loader_dynamic(config, train, pre_processed)
+    
+    return dynaload(dataset,
+          config.batch_size,
+          name,
+          DL,
+          perm=perm,
+          Nparts=Nparts,
+          part=part,
+          seed=seed,
+          taskid=taskid,
+          base_perm=base_perm,
+          base_seed=base_seed,
+          train = train,
+          **loader_kwargs)
+
+def svhn_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
+    """Builds and returns Dataloader for MNIST and SVHN dataset."""
+
+    transform = transforms.Compose([
+                    transforms.Resize(config.image_size),
+                    transforms.Grayscale(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.35,), (0.65,)),
+                    transforms.Lambda(lambda x: x.view(np.prod(config.image_size))),
+                    transforms.Lambda(lambda x: x*2-1)])
+    
+    name = 'SVHN'
+    
+    dataset = datasets.SVHN(root=config.data_path, download=True, transform=transform, split = 'train' if train else 'test')
+    dataset.train = train
+
+    if Nparts>1:
+        partition_dataset(dataset, Nparts, part)
+
+    if pre_processed:
+        dataset = preprocess_dataset(dataset)
+        DL = DataLoaderPreProcessed
+    else:
+        DL = DataLoader
+
+    return dataset,name, DL
+
+def get_svhn_loader_dynamic(config, train, perm=0, taskid=0, seed=0, Nparts=1, part=0,  pre_processed=True, **loader_kwargs):
+    dataset,name,DL = svhn_loader_dynamic(config, train, pre_processed)
+    
+    return dynaload(dataset,
+          config.batch_size,
+          name,
+          DL,
+          perm=perm,
+          Nparts=Nparts,
+          part=part,
+          seed=seed,
+          taskid=taskid,
+          base_perm=base_perm,
+          base_seed=base_seed,
+          train = train,
+          **loader_kwargs)
