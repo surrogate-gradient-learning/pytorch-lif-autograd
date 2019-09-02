@@ -1,0 +1,3 @@
+[submodule "decolle"]
+	path = thirdpartylibs
+	url = git@github.com:nmi-lab/decolle-public.git
