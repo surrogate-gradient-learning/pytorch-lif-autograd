@@ -1,3 +1,11 @@
 [submodule "decolle"]
 	path = thirdpartylibs
 	url = git@github.com:nmi-lab/decolle-public.git
+[submodule "decolle-public"]
+	path = decolle-public
+	url = git@github.com:nmi-lab/decolle-public.git
+	branch = master
+[submodule "decolle_public"]
+	path = decolle_public
+	url = git@github.com:nmi-lab/decolle-public.git
+	branch = master
