@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torchvision import datasets, models, transforms, utils
 import torch
-from torch.utils.data.dataloader import _DataLoaderIter, DataLoader
-import tqdm
+from torch.utils.data.dataloader import DataLoader
+#import tqdm
 import copy
 from collections import namedtuple
 
@@ -144,37 +144,37 @@ def target_convolve(tgt,alpha=8,alphas=5):
 
 datasetConfig = namedtuple('config',['image_size','batch_size','data_path'])
 
-class DataLoaderIterPreProcessed(_DataLoaderIter):
-    def __next__(self):
-           indices = next(self.sample_iter)  # may raise StopIteration
-           td, tl = self.dataset.data, self.dataset.targets
-           batch = self.collate_fn([(td[i], tl[i]) for i in indices])
-           return batch
-
-class DataLoaderPreProcessed(DataLoader):
-    def __iter__(self):
-        return DataLoaderIterPreProcessed(self)
+#class DataLoaderIterPreProcessed(_DataLoaderIter):
+#    def __next__(self):
+#           indices = next(self.sample_iter)  # may raise StopIteration
+#           td, tl = self.dataset.data, self.dataset.targets
+#           batch = self.collate_fn([(td[i], tl[i]) for i in indices])
+#           return batch
+#
+#class DataLoaderPreProcessed(DataLoader):
+#    def __iter__(self):
+#        return DataLoaderIterPreProcessed(self)
 
 def sequester(tensor):
     dtype = tensor.dtype
     return torch.tensor(tensor.detach().cpu().numpy(), dtype=dtype)
 
 
-def preprocess_dataset(dataset):
-    x, y = dataset.data[0], dataset.targets[0]
-    td = torch.empty(torch.Size([len(dataset)])+x.shape, dtype = torch.float32)
-    if not hasattr(y, 'shape'):
-        tl = torch.empty(torch.Size([len(dataset)]), dtype = torch.int)
-    else:
-        tl = torch.empty(torch.Size([len(dataset)])+y.shape, dtype = y.dtype)
-    for idx in tqdm.tqdm(range(len(dataset)), desc = "Pre-processing dataset"):
-        td[idx], tl[idx] = dataset[idx]
-        
-    dataset.data, dataset.targets = td, tl
-
-
-    dataset.transform = None
-    return dataset
+#def preprocess_dataset(dataset):
+#    x, y = dataset.data[0], dataset.targets[0]
+#    td = torch.empty(torch.Size([len(dataset)])+x.shape, dtype = torch.float32)
+#    if not hasattr(y, 'shape'):
+#        tl = torch.empty(torch.Size([len(dataset)]), dtype = torch.int)
+#    else:
+#        tl = torch.empty(torch.Size([len(dataset)])+y.shape, dtype = y.dtype)
+#    for idx in tqdm.tqdm(range(len(dataset)), desc = "Pre-processing dataset"):
+#        td[idx], tl[idx] = dataset[idx]
+#        
+#    dataset.data, dataset.targets = td, tl
+#
+#
+#    dataset.transform = None
+#    return dataset
 
 
 def pixel_permutation(d_size, r_pix=1.0, seed=0):
@@ -277,7 +277,7 @@ def get_mnist_loader(
         part=0,
         seed=0,
         taskid=0,
-        pre_processed=True,
+        pre_processed=False,
         base_perm=.0,
         base_seed=0,
         **loader_kwargs):
@@ -301,7 +301,7 @@ def get_mnist_loader(
           train = train,
           **loader_kwargs)
 
-def usps_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
+def usps_loader_dynamic(config, train, pre_processed=False, Nparts=1, part=1):
     """Builds and returns Dataloader for MNIST and SVHN dataset."""
     from usps_loader import USPS
     
@@ -327,7 +327,7 @@ def usps_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
     return dataset,name, DL
 
 
-def get_usps_loader(config, train, perm=0., Nparts=1, part=0, seed=0, taskid=0, pre_processed=True, **loader_kwargs):
+def get_usps_loader(config, train, perm=0., Nparts=1, part=0, seed=0, taskid=0, pre_processed=False, **loader_kwargs):
     """Builds and returns Dataloader for MNIST and SVHN dataset."""
     dataset,name,DL = usps_loader_dynamic(config, train, pre_processed)
     
@@ -345,7 +345,7 @@ def get_usps_loader(config, train, perm=0., Nparts=1, part=0, seed=0, taskid=0, 
           train = train,
           **loader_kwargs)
 
-def svhn_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
+def svhn_loader_dynamic(config, train, pre_processed=False, Nparts=1, part=1):
     """Builds and returns Dataloader for MNIST and SVHN dataset."""
 
     transform = transforms.Compose([
@@ -372,7 +372,7 @@ def svhn_loader_dynamic(config, train, pre_processed=True, Nparts=1, part=1):
 
     return dataset,name, DL
 
-def get_svhn_loader_dynamic(config, train, perm=0, taskid=0, seed=0, Nparts=1, part=0,  pre_processed=True, **loader_kwargs):
+def get_svhn_loader_dynamic(config, train, perm=0, taskid=0, seed=0, Nparts=1, part=0,  pre_processed=False, **loader_kwargs):
     dataset,name,DL = svhn_loader_dynamic(config, train, pre_processed)
     
     return dynaload(dataset,
